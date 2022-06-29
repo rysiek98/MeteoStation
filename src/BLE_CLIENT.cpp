@@ -6,21 +6,23 @@
  * Modified by: Michał Ryszka, 2022
  *
  */
-
 #include <Arduino.h>
 #include "BLEDevice.h"
 #include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <U8g2lib.h>
+#ifdef U8X8_HAVE_HW_I2C
+#include <Wire.h>
+#endif
+#define U8LOG_WIDTH 20
+#define U8LOG_HEIGHT 8
+#define MAXPAYLOADLENGTH 14
 
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 64 // OLED display height, in pixels
-
-// Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
-#define OLED_RESET -1 // Reset pin # (or -1 if sharing Arduino reset pin)
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-
+U8G2LOG u8g2log;
+uint8_t u8log_buffer[U8LOG_WIDTH * U8LOG_HEIGHT];
+U8G2_SH1106_128X64_NONAME_1_HW_I2C u8g2(U8G2_R0, /* reset=*/U8X8_PIN_NONE);
 // The remote service we wish to connect to.
 static BLEUUID serviceUUID("4fafc201-1fb5-459e-8fcc-c5c9c331914b");
 // The characteristic of the remote service we are interested in.
@@ -31,6 +33,7 @@ static boolean connected = false;
 static boolean doScan = false;
 static BLERemoteCharacteristic *pRemoteCharacteristic;
 static BLEAdvertisedDevice *myDevice;
+char measurments[MAXPAYLOADLENGTH];
 
 static void notifyCallback(
     BLERemoteCharacteristic *pBLERemoteCharacteristic,
@@ -44,6 +47,7 @@ static void notifyCallback(
   Serial.println(length);
   Serial.print("data: ");
   Serial.println((char *)pData);
+  memcpy(measurments, pData, length);
 }
 
 class MyClientCallback : public BLEClientCallbacks
@@ -135,6 +139,39 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks
   }   // onResult
 };    // MyAdvertisedDeviceCallbacks
 
+String parseTemperature()
+{
+  String reasult = "";
+  for (int i = 1; i < sizeof(measurments); i++)
+  {
+    if (measurments[i] == 'h')
+    {
+      break;
+    }
+    reasult += measurments[i];
+  }
+  return reasult;
+}
+
+String parseHumidity()
+{
+  String reasult = "";
+  bool flag = false;
+  for (int i = 1; i < sizeof(measurments); i++)
+  {
+    if (measurments[i] == 'h')
+    {
+      flag = true;
+      continue;
+    }
+    if (flag)
+    {
+      reasult += measurments[i];
+    }
+  }
+  return reasult;
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -151,28 +188,17 @@ void setup()
   pBLEScan->setActiveScan(true);
   pBLEScan->start(5, false);
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C))
-  { // Address 0x3D for 128x64
-    Serial.println(F("SSD1306 allocation failed"));
-    for (;;)
-      ;
-  }
-  delay(2000);
-  display.clearDisplay();
-
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.setCursor(0, 10);
-  // Display static text
-  display.println("Hello, world!");
-  display.display();
-  delay(2000);
+  u8g2.begin();
 } // End of setup.
 
 // This is the Arduino main loop function.
 void loop()
 {
-
+  u8g2.begin();
+  u8g2.setFont(u8g2_font_7x13_tr); // set the font for the terminal window
+  u8g2log.begin(u8g2, U8LOG_WIDTH, U8LOG_HEIGHT, u8log_buffer);
+  u8g2log.setLineHeightOffset(0); // set extra space between lines in pixel, this can be negative
+  u8g2log.setRedrawMode(1);
   // If the flag "doConnect" is true then we have scanned for and found the desired
   // BLE Server with which we wish to connect.  Now we connect to it.  Once we are
   // connected we set the connected flag to be true.
@@ -193,14 +219,26 @@ void loop()
   // with the current time since boot.
   if (connected)
   {
+    Serial.println("Connected");
     String newValue = "";
+    String temperature = "Temperature " + parseTemperature() + "°C";
+    String humidity = "Humidity " + parseHumidity() + "%";
     // Set the characteristic's value to be the array of bytes that is actually a string.
     pRemoteCharacteristic->writeValue(newValue.c_str(), newValue.length());
+    Serial.println(measurments);
+    u8g2log.println(temperature);
+    u8g2log.println(humidity);
   }
   else if (doScan)
   {
+    Serial.println("Scanning...");
     BLEDevice::getScan()->start(0); // this is just eample to start scan after disconnect, most likely there is better way to do it in arduino
+    u8g2log.print("Scanning...");
   }
-
-  delay(2000); // Delay a second between loops.
-} // End of loop
+  else
+  {
+    Serial.println("Waiting...");
+    u8g2log.print("Waiting...");
+  }
+  delay(4000);
+}
